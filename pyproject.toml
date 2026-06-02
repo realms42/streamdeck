@@ -1,0 +1,66 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "streamdeck-service"
+version = "0.1.0"
+description = "Drive an Elgato Stream Deck from a YAML config file with live reload"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "streamdeck>=0.9.5",
+    "Pillow>=10.0.0",
+    "pydantic>=2.0.0",
+    "PyYAML>=6.0",
+    "watchdog>=4.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.4",
+]
+
+[project.scripts]
+streamdeck-service = "streamdeck_service.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["streamdeck_service*"]
+
+# ---------------------------------------------------------------------------
+# Ruff
+# ---------------------------------------------------------------------------
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "RUF"]
+# RUF012: mutable class attributes annotation — Pydantic Field() pattern triggers it
+ignore = ["RUF012"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["streamdeck_service"]
+
+# ---------------------------------------------------------------------------
+# Pytest
+# ---------------------------------------------------------------------------
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -q"
+
+# ---------------------------------------------------------------------------
+# Coverage
+# ---------------------------------------------------------------------------
+
+[tool.coverage.run]
+source = ["streamdeck_service"]
+omit = ["streamdeck_service/__main__.py"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
