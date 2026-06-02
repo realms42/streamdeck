@@ -128,6 +128,10 @@ deterministic handler tests; `on_hold` timers use short, injectable durations.
 | `lint` | `ruff check` + `ruff format --check` |
 | `test` | `pytest --cov --cov-fail-under=80` on Python 3.10, 3.11, 3.12 × {ubuntu, windows} |
 
+The `test` step pins `shell: bash` so the backslash line-continuations in the
+`pytest` command work on Windows too — Windows runners default to PowerShell,
+where `\` is not a line continuation (and bash ships on all GitHub runners).
+
 Ruff config in `pyproject.toml`: `select = ["E","F","I","UP","B","RUF"]`,
 `line-length = 100`, `ignore = ["RUF012"]` (Pydantic Field pattern).
 
