@@ -1,0 +1,125 @@
+# ============================================================
+# Stream Deck service — example config demonstrating every feature
+# ============================================================
+
+device:
+  # Optional: target a specific deck by serial number.
+  # If omitted or serial not found, falls back to index.
+  # serial: "CL12345678"
+  index: 0          # 0-based; use when you have only one deck
+  brightness: 75    # 0–100
+
+buttons:
+
+  # ----------------------------------------------------------
+  # 1. Command button
+  #    Pressing key 0 opens a web browser.
+  # ----------------------------------------------------------
+  - key: 0
+    label: "Browser"
+    font_size: 13
+    text_color: "white"
+    background_color: "#1a73e8"   # Google-blue background
+    # icon: icons/browser.png     # uncomment to show an image instead
+    on_press:
+      - type: command
+        run: "xdg-open"           # use "start" on Windows
+        args: ["https://example.com"]
+
+  # ----------------------------------------------------------
+  # 2. Toggle button — mic mute
+  #    Pressing key 1 flips the "muted" state between false/true.
+  #    The button shows a different icon and label for each state.
+  # ----------------------------------------------------------
+  - key: 1
+    # Default appearance (muted = false, or unset)
+    label: "Mic ON"
+    font_size: 12
+    text_color: "white"
+    background_color: "#2d7a2d"   # green when live
+    # icon: icons/mic_on.png
+
+    # State-driven appearance overrides.
+    # "muted" is the state variable name; "true"/"false" are its possible values.
+    states:
+      muted:
+        "false":
+          label: "Mic ON"
+          background_color: "#2d7a2d"
+          # icon: icons/mic_on.png
+        "true":
+          label: "Muted"
+          background_color: "#cc0000"   # red when muted
+          # icon: icons/mic_off.png
+
+    on_press:
+      # Flip "muted" between false and true
+      - type: toggle
+        key: muted
+        values: ["false", "true"]
+      # Also run a shell command to actually mute/unmute
+      # (You would use a smarter script that reads current state in practice.)
+      # - type: command
+      #   run: "amixer"
+      #   args: ["set", "Capture", "toggle"]
+
+  # ----------------------------------------------------------
+  # 3. Icon button — open a folder
+  #    Demonstrates using a standalone icon with no label.
+  # ----------------------------------------------------------
+  - key: 2
+    icon: "icons/folder.png"      # 72×72 or larger PNG recommended
+    label: ""                     # empty label — icon only
+    background_color: "#222222"
+    on_press:
+      - type: command
+        run: "xdg-open"
+        args: ["/home/user/Documents"]
+
+  # ----------------------------------------------------------
+  # 4. Brightness control — cycle through brightness levels
+  #    Uses set_state + states to display current level.
+  # ----------------------------------------------------------
+  - key: 3
+    label: "Bright"
+    font_size: 11
+    text_color: "#ffcc00"
+    background_color: "#333300"
+
+    states:
+      brightness_level:
+        low:
+          label: "LOW"
+          background_color: "#221100"
+        mid:
+          label: "MID"
+          background_color: "#664400"
+        high:
+          label: "HIGH"
+          background_color: "#ffcc00"
+          text_color: "black"
+
+    on_press:
+      # Cycle through named levels — a second toggle-style interaction
+      # using set_state.  A real implementation would wire each level to
+      # an actual brightness value; here we show the pattern.
+      - type: toggle
+        key: brightness_level
+        values: ["low", "mid", "high"]
+
+  # ----------------------------------------------------------
+  # 5. Direct brightness button
+  #    One press sets deck brightness to 100 %.
+  # ----------------------------------------------------------
+  - key: 4
+    label: "MAX\nBright"
+    font_size: 12
+    text_color: "black"
+    background_color: "#ffffff"
+    on_press:
+      - type: set_brightness
+        value: 100
+    on_release:
+      # Dim back down when finger lifts
+      - type: set_brightness
+        value: 60
