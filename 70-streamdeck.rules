@@ -1,0 +1,15 @@
+# Elgato Stream Deck — udev rule
+# Grants read/write access to any Stream Deck device for members of the
+# "plugdev" group without requiring root.
+#
+# Install:
+#   sudo cp 70-streamdeck.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules
+#   sudo udevadm trigger
+#   sudo usermod -aG plugdev $USER   # then log out and back in
+#
+# Elgato vendor ID: 0x0fd9
+# Product IDs below cover: Original, Mini, XL, Original v2, MK.2, +, Neo, Pedal
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0fd9", TAG+="uaccess"
+SUBSYSTEM=="usb",    ATTRS{idVendor}=="0fd9", TAG+="uaccess"
+KERNEL=="hidraw*",   ATTRS{idVendor}=="0fd9", MODE="0660", GROUP="plugdev"
