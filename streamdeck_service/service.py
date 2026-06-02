@@ -6,14 +6,16 @@ import logging
 import signal
 import sys
 import threading
+import time
 from pathlib import Path
+from typing import Any
 
 from StreamDeck.DeviceManager import DeviceManager
 from StreamDeck.Transport.Transport import TransportError
 
 from .actions import dispatch
 from .config_loader import load_config
-from .models import StreamDeckConfig
+from .models import AnyAction, ButtonDef, StreamDeckConfig
 from .renderer import render_blank, render_key
 from .state_store import StateStore
 from .watcher import ConfigWatcher
@@ -22,15 +24,24 @@ log = logging.getLogger(__name__)
 
 
 class StreamDeckService:
-    def __init__(self, config_path: Path) -> None:
+    def __init__(self, config_path: Path, retry: float = 0.0) -> None:
         self._config_path = config_path.resolve()
         self._config_dir = self._config_path.parent
+        self._retry = retry
         self._deck = None
         self._config: StreamDeckConfig | None = None
         self._state = StateStore()
         self._render_lock = threading.Lock()
         self._watcher: ConfigWatcher | None = None
         self._running = False
+
+        # Per-key hold-timer bookkeeping (for `on_hold` actions).
+        self._hold_lock = threading.Lock()
+        self._hold_timers: dict[int, threading.Timer] = {}
+        self._hold_fired: set[int] = set()
+
+        # Re-render reactively whenever a state variable a button depends on changes.
+        self._state.add_listener(self._on_state_changed)
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -44,7 +55,7 @@ class StreamDeckService:
             log.error("Cannot start: initial config is invalid. Fix the config and restart.")
             sys.exit(1)
 
-        self._deck = self._open_deck(cfg)
+        self._deck = self._open_deck_with_retry(cfg)
         if self._deck is None:
             log.error("No Stream Deck found. Connect a device and restart.")
             sys.exit(1)
@@ -69,6 +80,17 @@ class StreamDeckService:
     # ------------------------------------------------------------------
     # Device management
     # ------------------------------------------------------------------
+
+    def _open_deck_with_retry(self, cfg: StreamDeckConfig):
+        """Open a deck, optionally polling every ``self._retry`` seconds until one appears."""
+        deck = self._open_deck(cfg)
+        if deck is not None or self._retry <= 0:
+            return deck
+        log.warning("No Stream Deck found; retrying every %.1f s (Ctrl-C to abort)", self._retry)
+        while deck is None:
+            time.sleep(self._retry)
+            deck = self._open_deck(cfg)
+        return deck
 
     def _open_deck(self, cfg: StreamDeckConfig):
         try:
@@ -125,7 +147,7 @@ class StreamDeckService:
             for key_idx in range(num_keys):
                 btn = cfg.button_by_key(key_idx)
                 if btn:
-                    img = render_key(btn, self._state, key_size, self._config_dir)
+                    img = render_key(btn, self._state, key_size, self._config_dir, cfg.device.font)
                 else:
                     img = render_blank(key_size)
                 self._set_key_image(key_idx, img)
@@ -161,14 +183,16 @@ class StreamDeckService:
 
         # Keys that were removed
         for key_idx in old_map:
-            if key_idx not in new_map:
+            if key_idx not in new_map and key_idx < num_keys:
                 changed_keys.append(key_idx)
 
         with self._render_lock:
             for key_idx in changed_keys:
                 btn = new_map.get(key_idx)
                 if btn:
-                    img = render_key(btn, self._state, key_size, self._config_dir)
+                    img = render_key(
+                        btn, self._state, key_size, self._config_dir, new_cfg.device.font
+                    )
                 else:
                     img = render_blank(key_size)
                 self._set_key_image(key_idx, img)
@@ -200,14 +224,7 @@ class StreamDeckService:
         self._config = new_cfg
 
         # Preserve state variables that still exist in the new config
-        new_state_keys: set[str] = set()
-        for btn in new_cfg.buttons:
-            for var_name in btn.states:
-                new_state_keys.add(var_name)
-            for action in btn.on_press + btn.on_release:
-                if hasattr(action, "key"):
-                    new_state_keys.add(action.key)
-        self._state.prune_to_keys(new_state_keys)
+        self._state.prune_to_keys(self._referenced_state_keys(new_cfg))
 
         try:
             if old_cfg is not None:
@@ -216,6 +233,18 @@ class StreamDeckService:
                 self._apply_config_fresh(new_cfg)
         except TransportError as exc:
             log.error("Deck communication error during reload: %s", exc)
+
+    @staticmethod
+    def _referenced_state_keys(cfg: StreamDeckConfig) -> set[str]:
+        """Collect every state variable named by a button's `states` or actions."""
+        keys: set[str] = set()
+        for btn in cfg.buttons:
+            keys.update(btn.states)
+            for action in (*btn.on_press, *btn.on_release, *btn.on_hold):
+                var = getattr(action, "key", None)
+                if var is not None:
+                    keys.add(var)
+        return keys
 
     # ------------------------------------------------------------------
     # Key press handling
@@ -229,14 +258,79 @@ class StreamDeckService:
         if btn is None:
             return
 
-        actions = btn.on_press if pressed else btn.on_release
+        if pressed:
+            self._dispatch_actions(btn.on_press, key_idx)
+            self._arm_hold(btn, key_idx)
+        else:
+            # If a hold already fired for this press, swallow the release.
+            if self._cancel_hold(key_idx):
+                self._rerender_key(key_idx)
+                return
+            self._dispatch_actions(btn.on_release, key_idx)
+
+        # Re-render this key in case state changed
+        self._rerender_key(key_idx)
+
+    def _dispatch_actions(self, actions: list[AnyAction], key_idx: int) -> None:
         for action in actions:
             try:
                 dispatch(action, self._state, self._set_brightness)
             except Exception:
                 log.exception("Error dispatching action on key %d", key_idx)
 
-        # Re-render this key in case state changed
+    def _on_state_changed(self, var_name: str, _value: Any) -> None:
+        """Re-render every button whose `states` map references *var_name*."""
+        cfg = self._config
+        deck = self._deck
+        if cfg is None or deck is None:
+            return
+        num_keys = deck.key_count()
+        for btn in cfg.buttons:
+            if btn.key < num_keys and var_name in btn.states:
+                self._rerender_key(btn.key)
+
+    # ------------------------------------------------------------------
+    # Hold (long-press) handling
+    # ------------------------------------------------------------------
+
+    def _arm_hold(self, btn: ButtonDef, key_idx: int) -> None:
+        """Start a timer that fires *btn*'s `on_hold` actions if the key stays down."""
+        if not btn.on_hold:
+            return
+        timer = threading.Timer(btn.hold_seconds, self._fire_hold, args=(key_idx,))
+        timer.daemon = True
+        with self._hold_lock:
+            existing = self._hold_timers.pop(key_idx, None)
+            if existing is not None:
+                existing.cancel()
+            self._hold_fired.discard(key_idx)
+            self._hold_timers[key_idx] = timer
+        timer.start()
+
+    def _cancel_hold(self, key_idx: int) -> bool:
+        """Cancel a pending hold timer for *key_idx*; return True if it had fired."""
+        with self._hold_lock:
+            timer = self._hold_timers.pop(key_idx, None)
+            fired = key_idx in self._hold_fired
+            self._hold_fired.discard(key_idx)
+        if timer is not None:
+            timer.cancel()
+        return fired
+
+    def _fire_hold(self, key_idx: int) -> None:
+        """Timer callback: run `on_hold` actions if the key is still held."""
+        cfg = self._config
+        if cfg is None:
+            return
+        btn = cfg.button_by_key(key_idx)
+        if btn is None:
+            return
+        with self._hold_lock:
+            # The release path pops the timer; if it's gone the press already ended.
+            if self._hold_timers.pop(key_idx, None) is None:
+                return
+            self._hold_fired.add(key_idx)
+        self._dispatch_actions(btn.on_hold, key_idx)
         self._rerender_key(key_idx)
 
     def _rerender_key(self, key_idx: int) -> None:
@@ -247,7 +341,7 @@ class StreamDeckService:
         key_size = self._deck.key_image_format()["size"]
         with self._render_lock:
             img = (
-                render_key(btn, self._state, key_size, self._config_dir)
+                render_key(btn, self._state, key_size, self._config_dir, cfg.device.font)
                 if btn
                 else render_blank(key_size)
             )
@@ -273,20 +367,17 @@ class StreamDeckService:
     def _handle_signal(self, signum: int, frame) -> None:
         log.info("Received signal %d, shutting down…", signum)
         self._running = False
-        # Unblock signal.pause() on Unix
-        if hasattr(signal, "pthread_kill") and hasattr(threading, "main_thread"):
-            pass  # signal.pause() will return after the handler
+        # Raising here unblocks signal.pause() and unwinds to run()'s finally.
         raise SystemExit(0)
 
     def _windows_wait(self) -> None:
         """Blocking wait for Windows where signal.pause() is unavailable."""
-        import time
-
         while self._running:
             time.sleep(0.5)
 
     def _shutdown(self) -> None:
         log.info("Shutting down…")
+        self._cancel_all_holds()
         if self._watcher:
             self._watcher.stop()
         if self._deck:
@@ -296,3 +387,31 @@ class StreamDeckService:
             except TransportError:
                 pass
         log.info("Bye.")
+
+    def _cancel_all_holds(self) -> None:
+        with self._hold_lock:
+            timers = list(self._hold_timers.values())
+            self._hold_timers.clear()
+            self._hold_fired.clear()
+        for timer in timers:
+            timer.cancel()
+
+
+def list_decks() -> list[dict[str, Any]]:
+    """Enumerate connected Stream Decks, returning index/serial/type/key-count info."""
+    decks = DeviceManager().enumerate()
+    result: list[dict[str, Any]] = []
+    for idx, d in enumerate(decks):
+        d.open()
+        try:
+            result.append(
+                {
+                    "index": idx,
+                    "serial": d.get_serial_number(),
+                    "type": d.deck_type(),
+                    "keys": d.key_count(),
+                }
+            )
+        finally:
+            d.close()
+    return result

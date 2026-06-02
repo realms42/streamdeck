@@ -4,9 +4,12 @@ A Python service that drives an Elgato Stream Deck from a YAML config file, with
 
 ## Features
 
-- Declarative YAML config — buttons, icons, labels, colors, actions
+- Declarative YAML config — buttons, icons, labels, colors, fonts, actions
 - Named state variables — buttons change appearance based on runtime state (toggle, set_state)
+- Reactive re-rendering — when a state variable changes, every button that depends on it updates
 - Action types: `command`, `set_state`, `toggle`, `set_brightness`
+- Press, release, and long-press (`on_hold`) action hooks
+- Configurable fonts (per device, per button, or per state) with multi-line, centered labels
 - Live reload with debouncing — edits in any text editor reload only changed keys
 - Invalid configs are rejected with clear error messages; the deck keeps running on the last good config
 - Clean shutdown on Ctrl-C / SIGTERM
@@ -93,6 +96,14 @@ python -m streamdeck_service --config /path/to/my_config.yaml
 
 # Verbose logging
 python -m streamdeck_service --log-level DEBUG
+
+# List connected decks (index, serial, type, key count) and exit —
+# useful for filling in device.serial
+python -m streamdeck_service --list-decks
+
+# Wait for a deck instead of exiting if none is connected at startup
+# (polls every 5 seconds)
+python -m streamdeck_service --retry 5
 ```
 
 Or, if installed as a package:
@@ -114,6 +125,7 @@ device:
   serial: "CL12345678"   # optional; omit to use index
   index: 0               # 0-based device index (default 0)
   brightness: 75         # 0–100 (default 70)
+  font: "DejaVuSans-Bold.ttf"  # optional default font for all buttons
 
 buttons:
   - key: 0
@@ -125,11 +137,13 @@ buttons:
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `key` | int | — | Physical key index (0-based, required) |
-| `label` | string | `null` | Text drawn on the key |
+| `label` | string | `null` | Text drawn on the key (`\n` for multiple, centered lines) |
 | `font_size` | int | `14` | Font size in pixels |
 | `text_color` | string | `"white"` | CSS color or hex (`#rrggbb`) |
 | `background_color` | string | `"black"` | CSS color or hex |
 | `icon` | string | `null` | Path to PNG/JPEG relative to the config file |
+| `font` | string | `null` | Font file (relative to config) or system font name; overrides `device.font` |
+| `hold_seconds` | float | `0.6` | How long a press must last before `on_hold` fires |
 
 ### State-driven appearance (`states`)
 
@@ -137,14 +151,23 @@ buttons:
 states:
   <state_variable_name>:
     <state_value>:
-      label: "..."          # any appearance fields may be overridden
-      background_color: "#cc0000"
+      label: "..."          # any appearance field may be overridden,
+      background_color: "#cc0000"   # including font / font_size / text_color
       icon: icons/off.png
 ```
 
-### Actions (`on_press` / `on_release`)
+When a state variable changes (via `set_state` or `toggle`), **every** button whose
+`states` map references that variable is re-rendered automatically.
 
-Each is a list of actions executed in order.
+### Actions (`on_press` / `on_release` / `on_hold`)
+
+Each is a list of actions executed in order (a single action may be written as a
+bare mapping instead of a one-item list).
+
+- `on_press` — fires immediately on key-down.
+- `on_release` — fires on key-up.
+- `on_hold` — fires once if the key is still held after `hold_seconds`. When a
+  hold fires, the matching `on_release` for that press is skipped.
 
 #### `command`
 ```yaml
@@ -181,6 +204,26 @@ Edit and save the config file — changes are applied within ~0.5 s.  Only keys 
 
 ---
 
+## Auto-start on Linux (systemd)
+
+A `streamdeck.service` template is included.  Install it as a **user** service so
+it keeps the unprivileged USB access from the udev rule and can reach your desktop
+session:
+
+```bash
+mkdir -p ~/.config/systemd/user ~/.config/streamdeck
+cp config.example.yaml ~/.config/streamdeck/config.yaml   # then edit it
+cp streamdeck.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now streamdeck.service
+journalctl --user -u streamdeck.service -f   # follow the logs
+```
+
+The unit starts the service with `--retry 5` so it waits for the deck to be
+plugged in rather than exiting.
+
+---
+
 ## Project layout
 
 ```
@@ -196,6 +239,7 @@ streamdeck_service/
   service.py        — Main service: device lifecycle, config diff, key callbacks
 config.example.yaml — Annotated example demonstrating every feature
 70-streamdeck.rules — Linux udev rule for unprivileged USB access
+streamdeck.service  — systemd user-service template for auto-start
 requirements.txt
 pyproject.toml
 ```

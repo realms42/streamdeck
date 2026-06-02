@@ -9,27 +9,42 @@ device:
   index: 0          # 0-based; use when you have only one deck
   brightness: 75    # 0–100
 
+  # Optional default font for every button. May be a font file path relative
+  # to this config, or a system font name Pillow can resolve. Per-button and
+  # per-state `font:` keys override it. Omit to use the built-in default.
+  # font: "DejaVuSans-Bold.ttf"
+
 buttons:
 
   # ----------------------------------------------------------
-  # 1. Command button
-  #    Pressing key 0 opens a web browser.
+  # 1. Command button (with a long-press alternative)
+  #    Press key 0 to open a web browser; hold it to open a
+  #    different page after `hold_seconds`.
   # ----------------------------------------------------------
   - key: 0
     label: "Browser"
     font_size: 13
     text_color: "white"
     background_color: "#1a73e8"   # Google-blue background
+    # font: "DejaVuSans-Bold.ttf" # per-button font override
     # icon: icons/browser.png     # uncomment to show an image instead
     on_press:
       - type: command
         run: "xdg-open"           # use "start" on Windows
         args: ["https://example.com"]
+    # on_hold fires once if the key stays down past `hold_seconds`.
+    # When a hold fires, the matching on_release is skipped.
+    hold_seconds: 0.8
+    on_hold:
+      - type: command
+        run: "xdg-open"
+        args: ["https://example.com/help"]
 
   # ----------------------------------------------------------
   # 2. Toggle button — mic mute
   #    Pressing key 1 flips the "muted" state between false/true.
-  #    The button shows a different icon and label for each state.
+  #    The button shows a different label/color for each state, and
+  #    the visual updates reactively whenever "muted" changes.
   # ----------------------------------------------------------
   - key: 1
     # Default appearance (muted = false, or unset)
@@ -77,39 +92,31 @@ buttons:
         args: ["/home/user/Documents"]
 
   # ----------------------------------------------------------
-  # 4. Brightness control — cycle through brightness levels
-  #    Uses set_state + states to display current level.
+  # 4. Dim button — actually changes deck brightness
+  #    `set_brightness` drives the hardware directly; the matching
+  #    `set_state` updates the on-screen indicator reactively.
   # ----------------------------------------------------------
   - key: 3
-    label: "Bright"
+    label: "Dim"
     font_size: 11
     text_color: "#ffcc00"
-    background_color: "#333300"
-
+    background_color: "#221100"
     states:
-      brightness_level:
-        low:
-          label: "LOW"
-          background_color: "#221100"
-        mid:
-          label: "MID"
-          background_color: "#664400"
-        high:
-          label: "HIGH"
-          background_color: "#ffcc00"
-          text_color: "black"
-
+      dimmed:
+        "true":
+          label: "Dimmed"
+          background_color: "#332200"
     on_press:
-      # Cycle through named levels — a second toggle-style interaction
-      # using set_state.  A real implementation would wire each level to
-      # an actual brightness value; here we show the pattern.
-      - type: toggle
-        key: brightness_level
-        values: ["low", "mid", "high"]
+      - type: set_brightness
+        value: 30
+      - type: set_state
+        key: dimmed
+        value: "true"
 
   # ----------------------------------------------------------
-  # 5. Direct brightness button
-  #    One press sets deck brightness to 100 %.
+  # 5. Direct brightness button (multi-line label)
+  #    One press sets deck brightness to 100 %, release dims it.
+  #    The "\n" in the label is centered across both lines.
   # ----------------------------------------------------------
   - key: 4
     label: "MAX\nBright"
@@ -119,6 +126,9 @@ buttons:
     on_press:
       - type: set_brightness
         value: 100
+      - type: set_state
+        key: dimmed
+        value: "false"
     on_release:
       # Dim back down when finger lifts
       - type: set_brightness

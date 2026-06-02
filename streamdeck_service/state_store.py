@@ -58,8 +58,9 @@ class StateStore:
 
     def merge(self, other: StateStore) -> None:
         """Copy values from *other* into self without firing listeners."""
+        incoming = other.snapshot()  # read under other's own lock
         with self._lock:
-            self._data.update(other._data)
+            self._data.update(incoming)
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:

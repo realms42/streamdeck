@@ -6,7 +6,6 @@ import logging
 import shlex
 import subprocess
 from collections.abc import Callable
-from typing import TYPE_CHECKING
 
 from .models import (
     AnyAction,
@@ -16,9 +15,6 @@ from .models import (
     ToggleAction,
 )
 from .state_store import StateStore
-
-if TYPE_CHECKING:
-    pass
 
 log = logging.getLogger(__name__)
 

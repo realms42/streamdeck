@@ -1,0 +1,30 @@
+# systemd *user* service template for the Stream Deck service.
+#
+# Running as a user service (not system-wide) keeps the unprivileged USB
+# access granted by 70-streamdeck.rules and lets `command` actions reach your
+# desktop session (e.g. xdg-open).
+#
+# Install:
+#   mkdir -p ~/.config/systemd/user ~/.config/streamdeck
+#   cp config.example.yaml ~/.config/streamdeck/config.yaml   # then edit it
+#   cp streamdeck.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now streamdeck.service
+#
+# Follow the logs with:
+#   journalctl --user -u streamdeck.service -f
+
+[Unit]
+Description=Stream Deck service
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+# --retry waits for the deck to be plugged in instead of exiting immediately.
+ExecStart=/usr/bin/env streamdeck-service --config %h/.config/streamdeck/config.yaml --retry 5
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
