@@ -27,10 +27,12 @@ jobs:
         run: ruff format --check streamdeck_service/ tests/
 
   test:
-    name: Test (Python ${{ matrix.python-version }})
-    runs-on: ubuntu-latest
+    name: Test (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
+        os: [ubuntu-latest, windows-latest]
         python-version: ["3.10", "3.11", "3.12"]
 
     steps:
@@ -44,6 +46,9 @@ jobs:
         run: pip install -e ".[dev]"
 
       - name: Run tests with coverage
+        # Force bash so the backslash line-continuations work on Windows too
+        # (the default Windows shell is PowerShell, where `\` is not a continuation).
+        shell: bash
         run: |
           pytest tests/ \
             --cov=streamdeck_service \

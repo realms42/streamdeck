@@ -130,3 +130,17 @@ def test_dispatch_command_oserror_logs_error(
     with patch("subprocess.Popen", side_effect=OSError("permission denied")):
         dispatch(action, state, brightness_cb)
     assert "Failed to launch" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# unknown / unsupported action
+# ---------------------------------------------------------------------------
+
+
+def test_dispatch_unknown_action_logs_warning(
+    state: StateStore,
+    brightness_cb: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    dispatch(object(), state, brightness_cb)  # type: ignore[arg-type]
+    assert "Unknown action type" in caplog.text
